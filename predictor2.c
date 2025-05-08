@@ -27,7 +27,7 @@ void writeCSV(const char *filename, DataPoint data[], int n) {
 }
 
 void plotGnuplot(DataPoint data[], int n, const char *title) {
-    FILE *gp = popen("gnuplot -p", "w");
+    FILE *gp = popen("\"C:\\Program Files\\gnuplot\\bin\\gnuplot.exe\" -p", "w");
     if (!gp) { 
         // Gnuplot not installed
         printf("Warning: Gnuplot not found. Skipping visualization.\n");
