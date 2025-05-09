@@ -29,7 +29,7 @@ type data.csv | predictor2.exe
 or
 
 ```
-predictor2.exe < data.csv
+./predictor2 data.csv
 ```
 
 > **Note:** Replace `data.csv` with the name of the file you are using.
