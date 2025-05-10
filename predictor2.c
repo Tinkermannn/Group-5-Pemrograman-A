@@ -1,324 +1,569 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <math.h>
 
 #define MAX_ROWS 1000
 
+// Struktur untuk menyimpan data dari 3 kolom
 typedef struct {
-    double x;
-    double y;
-    int missing_x; // 1 if x is missing
-    int missing_y; // 1 if y is missing
-    int predicted;  // 1 if value was predicted
+    double x;        // Year
+    double y;        // Percentage_Internet_User
+    double z;        // Population
+    int missing_y;   // 1 jika Percentage_Internet_User kosong
+    int missing_z;   // 1 jika Population kosong
 } DataPoint;
 
-void writeCSV(const char *filename, DataPoint data[], int n) {
-    FILE *fp = fopen(filename, "w");
-    if (!fp) { 
-        perror("Error writing CSV"); 
-        return; 
-    }
-    fprintf(fp, "Data A,Data B\n");
-    for (int i = 0; i < n; i++) {
-        fprintf(fp, "%.2f,%.2f\n", data[i].x, data[i].y);
-    }
-    fclose(fp);
-}
-
-void plotGnuplot(DataPoint data[], int n, const char *title) {
-    FILE *gp = popen("\"C:\\Program Files\\gnuplot\\bin\\gnuplot.exe\" -p", "w");
-    if (!gp) { 
-        // Gnuplot not installed
-        printf("Warning: Gnuplot not found. Skipping visualization.\n");
-        return;
-    }
-    fprintf(gp, "set title '%s'\n", title);
-    fprintf(gp, "plot '-' with points title 'Original', '-' with points title 'Predicted'\n");
-    // Original data
-    for (int i = 0; i < n; i++) {
-        if (!data[i].predicted) fprintf(gp, "%f %f\n", data[i].x, data[i].y);
-    }
-    fprintf(gp, "e\n");
-    // Predicted data
-    for (int i = 0; i < n; i++) {
-        if (data[i].predicted) fprintf(gp, "%f %f\n", data[i].x, data[i].y);
-    }
-    fprintf(gp, "e\n");
-    pclose(gp);
-}
-
-int readCSV(FILE *fp, DataPoint data[]) {
-    if (!fp) { 
-        return -1; 
-    }
+// Baca CSV dengan 3 kolom, simpan ke dalam array data[]
+int readCSV(const char *filename, DataPoint data[]) {
+    FILE *fp = fopen(filename, "r");
+    if (!fp) { perror("Error membuka file"); return -1; }
     
     char line[1024];
-    fgets(line, sizeof(line), fp); // Skip header
+    // Baca header (asumsi ada)
+    if (!fgets(line, sizeof(line), fp)) { fclose(fp); return 0; }
+
     int i = 0;
-    while (fgets(line, sizeof(line), fp) && i < MAX_ROWS) {
+    while (fgets(line, sizeof(line), fp)) {
         line[strcspn(line, "\r\n")] = 0;
-        char *x_str = strtok(line, ",");
-        char *y_str = strtok(NULL, ",");
 
-        data[i].missing_x = (x_str == NULL || *x_str == '\0') ? 1 : 0;
-        data[i].missing_y = (y_str == NULL || *y_str == '\0') ? 1 : 0;
-        data[i].predicted = 0; // Initialize as not predicted
-
-        // Safely convert strings to numbers
-        if (!data[i].missing_x) {
-            char *endptr;
-            data[i].x = strtod(x_str, &endptr);
-            // Check if conversion failed
-            if (endptr == x_str) {
-                data[i].missing_x = 1;
-                data[i].x = 0;
-            }
+        // Parse Year
+        char *token = strtok(line, ",");
+        if (token && *token != '\0') {
+            data[i].x = atof(token);
         } else {
             data[i].x = 0;
         }
 
-        if (!data[i].missing_y) {
-            char *endptr;
-            data[i].y = strtod(y_str, &endptr);
-            // Check if conversion failed
-            if (endptr == y_str) {
-                data[i].missing_y = 1;
-                data[i].y = 0;
-            }
+        // Parse Percentage_Internet_User
+        token = strtok(NULL, ",");
+        if (token && *token != '\0') {
+            data[i].y = atof(token);
+            data[i].missing_y = 0;
         } else {
             data[i].y = 0;
+            data[i].missing_y = 1;
         }
-        
+
+        // Parse Population
+        token = strtok(NULL, ",");
+        if (token && *token != '\0') {
+            data[i].z = atof(token);
+            data[i].missing_z = 0;
+        } else {
+            data[i].z = 0;
+            data[i].missing_z = 1;
+        }
+
         i++;
+        if (i >= MAX_ROWS) break;
     }
+    
+    fclose(fp);
     return i;
 }
 
-// Forward regression: Predict y from x (if x is known)
-void linearRegression(DataPoint data[], int n) {
-    double sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0;
+// Regresi linier sederhana untuk kolom y (Percentage_Internet_User)
+void predictLinearY(DataPoint data[], double y_pred[], int n) {
+    double sumx = 0, sumy = 0, sumx2 = 0, sumxy = 0;
     int count = 0;
+    
     for (int i = 0; i < n; i++) {
-        if (!data[i].missing_x && !data[i].missing_y) {
-            sum_x += data[i].x;
-            sum_y += data[i].y;
-            sum_xy += data[i].x * data[i].y;
-            sum_x2 += data[i].x * data[i].x;
+        if (!data[i].missing_y) {
+            sumx += data[i].x;
+            sumy += data[i].y;
+            sumx2 += data[i].x * data[i].x;
+            sumxy += data[i].x * data[i].y;
             count++;
         }
     }
-    if (count < 2) {
-        printf("Warning: Not enough data points for linear regression\n");
-        return;
-    }
     
-    double denom = count * sum_x2 - sum_x * sum_x;
-    if (fabs(denom) < 1e-10) {
-        printf("Warning: Denominator too small for linear regression\n");
-        return;
-    }
+    if (count < 2) return; // Tidak bisa regresi dengan kurang dari 2 titik
     
-    double slope = (count * sum_xy - sum_x * sum_y) / denom;
-    double intercept = (sum_y - slope * sum_x) / count;
+    double d = count * sumx2 - sumx * sumx;
+    if (d == 0) return;
 
-    printf("Linear regression: y = %.4f * x + %.4f\n", slope, intercept);
+    double m = (count * sumxy - sumx * sumy) / d;
+    double c = (sumy * sumx2 - sumx * sumxy) / d;
 
-    // Predict missing y (if x is known)
     for (int i = 0; i < n; i++) {
-        if (data[i].missing_y && !data[i].missing_x) {
-            data[i].y = slope * data[i].x + intercept;
-            data[i].missing_y = 0; // Mark as not missing anymore
-            data[i].predicted = 1; // Mark as predicted
+        if (data[i].missing_y) {
+            y_pred[i] = m * data[i].x + c;
+            if (y_pred[i] < 0) y_pred[i] = 0; // Pastikan persentase tidak negatif
+        } else {
+            y_pred[i] = data[i].y; // Simpan data asli untuk yang tidak missing
         }
     }
 }
 
-// Reverse regression: Predict x from y (if y is known)
-void reverseRegression(DataPoint data[], int n) {
-    double sum_x = 0, sum_y = 0, sum_xy = 0, sum_y2 = 0;
+// Regresi linier sederhana untuk kolom z (Population)
+void predictLinearZ(DataPoint data[], double z_pred[], int n) {
+    double sumx = 0, sumz = 0, sumx2 = 0, sumxz = 0;
     int count = 0;
+    
     for (int i = 0; i < n; i++) {
-        if (!data[i].missing_x && !data[i].missing_y) {
-            sum_x += data[i].x;
-            sum_y += data[i].y;
-            sum_xy += data[i].x * data[i].y;
-            sum_y2 += data[i].y * data[i].y;
+        if (!data[i].missing_z) {
+            sumx += data[i].x;
+            sumz += data[i].z;
+            sumx2 += data[i].x * data[i].x;
+            sumxz += data[i].x * data[i].z;
             count++;
         }
     }
-    if (count < 2) {
-        printf("Warning: Not enough data points for reverse regression\n");
-        return;
-    }
     
-    double denom = count * sum_y2 - sum_y * sum_y;
-    if (fabs(denom) < 1e-10) {
-        printf("Warning: Denominator too small for reverse regression\n");
-        return;
-    }
+    if (count < 2) return; // Tidak bisa regresi dengan kurang dari 2 titik
     
-    double slope = (count * sum_xy - sum_x * sum_y) / denom;
-    double intercept = (sum_x - slope * sum_y) / count;
+    double d = count * sumx2 - sumx * sumx;
+    if (d == 0) return;
 
-    printf("Reverse regression: x = %.4f * y + %.4f\n", slope, intercept);
+    double m = (count * sumxz - sumx * sumz) / d;
+    double c = (sumz * sumx2 - sumx * sumxz) / d;
 
-    // Predict missing x (if y is known)
     for (int i = 0; i < n; i++) {
-        if (data[i].missing_x && !data[i].missing_y) {
-            data[i].x = slope * data[i].y + intercept;
-            data[i].missing_x = 0; // Mark as not missing anymore
-            data[i].predicted = 1; // Mark as predicted
+        if (data[i].missing_z) {
+            z_pred[i] = m * data[i].x + c;
+            if (z_pred[i] < 0) z_pred[i] = 0; // Pastikan populasi tidak negatif
+        } else {
+            z_pred[i] = data[i].z; // Simpan data asli untuk yang tidak missing
         }
     }
 }
 
-// Lagrange interpolation for y (requires known x)
-void lagrangeInterpolation(DataPoint data[], int n) {
-    DataPoint known[MAX_ROWS];
-    int k = 0;
-    
-    // Copy known data points to a separate array
+// Interpolasi linier lokal untuk kolom y (Percentage_Internet_User)
+void predictInterpolationY(DataPoint data[], double y_pred[], int n) {
     for (int i = 0; i < n; i++) {
-        if (!data[i].missing_x && !data[i].missing_y) {
-            known[k++] = data[i];
-        }
-    }
-    
-    if (k < 2) {
-        printf("Warning: Not enough data points for Lagrange interpolation\n");
-        return;
-    }
-    
-    for (int i = 0; i < n; i++) {
-        if (data[i].missing_y && !data[i].missing_x) {
-            double result = 0;
-            for (int j = 0; j < k; j++) {
-                double term = known[j].y;
-                for (int m = 0; m < k; m++) {
-                    if (m != j) {
-                        double divisor = known[j].x - known[m].x;
-                        if (fabs(divisor) < 1e-10) {
-                            // Skip this term if divisor is too small
-                            term = 0;
-                            break;
-                        }
-                        term *= (data[i].x - known[m].x) / divisor;
-                    }
+        if (data[i].missing_y) {
+            int left = -1, right = -1;
+
+            // Cari tetangga kiri
+            for (int j = i - 1; j >= 0; j--) {
+                if (!data[j].missing_y) { left = j; break; }
+            }
+
+            // Cari tetangga kanan
+            for (int j = i + 1; j < n; j++) {
+                if (!data[j].missing_y) { right = j; break; }
+            }
+
+            if (left != -1 && right != -1) {
+                // Gunakan interpolasi linier lokal
+                double slope = (data[right].y - data[left].y) / (data[right].x - data[left].x);
+                y_pred[i] = data[left].y + slope * (data[i].x - data[left].x);
+                if (y_pred[i] < 0) y_pred[i] = 0; // Pastikan persentase tidak negatif
+            } else if (left != -1) {
+                // Ekstrapolasi dari kiri jika tidak ada tetangga kanan
+                int left2 = -1;
+                for (int j = left - 1; j >= 0; j--) {
+                    if (!data[j].missing_y) { left2 = j; break; }
                 }
-                result += term;
-            }
-            data[i].y = result;
-            data[i].missing_y = 0;
-            data[i].predicted = 1; // Mark as predicted
-        }
-    }
-}
-
-// Handle rows where both x and y are missing (simple extrapolation)
-void extrapolateMissing(DataPoint data[], int n) {
-    if (n < 3) {
-        printf("Warning: Not enough data points for extrapolation\n");
-        return;
-    }
-    
-    double last_x = 0, last_y = 0;
-    int last_valid_idx = -1;
-    
-    // Find the last valid data point first
-    for (int i = 0; i < n; i++) {
-        if (!data[i].missing_x && !data[i].missing_y) {
-            last_x = data[i].x;
-            last_y = data[i].y;
-            last_valid_idx = i;
-        }
-    }
-    
-    if (last_valid_idx < 2) {
-        printf("Warning: Not enough valid data points for extrapolation\n");
-        return;
-    }
-    
-    for (int i = 0; i < n; i++) {
-        if (data[i].missing_x && data[i].missing_y) {
-            if (i >= 2 && !data[i-1].missing_x && !data[i-1].missing_y && 
-                !data[i-2].missing_x && !data[i-2].missing_y) {
-                // Safe to extrapolate based on previous two points
-                data[i].x = 2 * data[i-1].x - data[i-2].x; // Linear extrapolation
-                data[i].y = 2 * data[i-1].y - data[i-2].y; // Linear extrapolation
+                if (left2 != -1) {
+                    double slope = (data[left].y - data[left2].y) / (data[left].x - data[left2].x);
+                    y_pred[i] = data[left].y + slope * (data[i].x - data[left].x);
+                    if (y_pred[i] < 0) y_pred[i] = 0;
+                } else {
+                    y_pred[i] = data[left].y; // Gunakan nilai terakhir yang tersedia
+                }
+            } else if (right != -1) {
+                // Ekstrapolasi dari kanan jika tidak ada tetangga kiri
+                int right2 = -1;
+                for (int j = right + 1; j < n; j++) {
+                    if (!data[j].missing_y) { right2 = j; break; }
+                }
+                if (right2 != -1) {
+                    double slope = (data[right2].y - data[right].y) / (data[right2].x - data[right].x);
+                    y_pred[i] = data[right].y - slope * (data[right].x - data[i].x);
+                    if (y_pred[i] < 0) y_pred[i] = 0;
+                } else {
+                    y_pred[i] = data[right].y; // Gunakan nilai pertama yang tersedia
+                }
             } else {
-                // Fallback to simpler method
-                data[i].x = last_x + 1;
-                data[i].y = last_y;
+                y_pred[i] = 0; // Default jika tidak ada data referensi
             }
-            data[i].missing_x = 0;
-            data[i].missing_y = 0;
-            data[i].predicted = 1; // Mark as predicted
+        } else {
+            y_pred[i] = data[i].y; // Simpan data asli untuk yang tidak missing
         }
     }
 }
 
-void printUsage(char* programName) {
-    printf("Usage: %s <input_csv_file>\n", programName);
-    printf("   or: %s (to read from stdin)\n", programName);
+// Interpolasi linier lokal untuk kolom z (Population)
+void predictInterpolationZ(DataPoint data[], double z_pred[], int n) {
+    for (int i = 0; i < n; i++) {
+        if (data[i].missing_z) {
+            int left = -1, right = -1;
+
+            // Cari tetangga kiri
+            for (int j = i - 1; j >= 0; j--) {
+                if (!data[j].missing_z) { left = j; break; }
+            }
+
+            // Cari tetangga kanan
+            for (int j = i + 1; j < n; j++) {
+                if (!data[j].missing_z) { right = j; break; }
+            }
+
+            if (left != -1 && right != -1) {
+                // Gunakan interpolasi linier lokal
+                double slope = (data[right].z - data[left].z) / (data[right].x - data[left].x);
+                z_pred[i] = data[left].z + slope * (data[i].x - data[left].x);
+                if (z_pred[i] < 0) z_pred[i] = 0; // Pastikan populasi tidak negatif
+            } else if (left != -1) {
+                // Ekstrapolasi dari kiri jika tidak ada tetangga kanan
+                int left2 = -1;
+                for (int j = left - 1; j >= 0; j--) {
+                    if (!data[j].missing_z) { left2 = j; break; }
+                }
+                if (left2 != -1) {
+                    double slope = (data[left].z - data[left2].z) / (data[left].x - data[left2].x);
+                    z_pred[i] = data[left].z + slope * (data[i].x - data[left].x);
+                    if (z_pred[i] < 0) z_pred[i] = 0;
+                } else {
+                    z_pred[i] = data[left].z; // Gunakan nilai terakhir yang tersedia
+                }
+            } else if (right != -1) {
+                // Ekstrapolasi dari kanan jika tidak ada tetangga kiri
+                int right2 = -1;
+                for (int j = right + 1; j < n; j++) {
+                    if (!data[j].missing_z) { right2 = j; break; }
+                }
+                if (right2 != -1) {
+                    double slope = (data[right2].z - data[right].z) / (data[right2].x - data[right].x);
+                    z_pred[i] = data[right].z - slope * (data[right].x - data[i].x);
+                    if (z_pred[i] < 0) z_pred[i] = 0;
+                } else {
+                    z_pred[i] = data[right].z; // Gunakan nilai pertama yang tersedia
+                }
+            } else {
+                z_pred[i] = 0; // Default jika tidak ada data referensi
+            }
+        } else {
+            z_pred[i] = data[i].z; // Simpan data asli untuk yang tidak missing
+        }
+    }
 }
 
-int main(int argc, char *argv[]) {
+// Regresi polinomial untuk kolom y (Percentage_Internet_User)
+void predictPolynomialY(DataPoint data[], double y_pred[], int n, double *a0, double *a1, double *a2) {
+    double sx = 0, sy = 0, sx2 = 0, sx3 = 0, sx4 = 0, sxy = 0, sx2y = 0;
+    int count = 0;
+    
+    for (int i = 0; i < n; i++) {
+        if (!data[i].missing_y) {
+            double xi = data[i].x, yi = data[i].y;
+            sx += xi; sy += yi;
+            sx2 += xi * xi;
+            sx3 += xi * xi * xi;
+            sx4 += xi * xi * xi * xi;
+            sxy += xi * yi;
+            sx2y += xi * xi * yi;
+            count++;
+        }
+    }
+
+    if (count < 3) return;
+
+    // Matriks augmented 3x4 untuk persamaan normal
+    double M[3][4] = {
+        { (double)count, sx,   sx2,  sy   },
+        { sx,            sx2,  sx3,  sxy  },
+        { sx2,           sx3,  sx4,  sx2y }
+    };
+
+    // Eliminasi Gauss
+    for (int k = 0; k < 3; k++) {
+        double pivot = M[k][k];
+        if (fabs(pivot) < 1e-10) continue;
+
+        for (int j = k; j < 4; j++) {
+            M[k][j] /= pivot;
+        }
+
+        for (int i = 0; i < 3; i++) {
+            if (i != k) {
+                double factor = M[i][k];
+                for (int j = k; j < 4; j++) {
+                    M[i][j] -= factor * M[k][j];
+                }
+            }
+        }
+    }
+
+    *a0 = M[0][3];
+    *a1 = M[1][3];
+    *a2 = M[2][3];
+
+    for (int i = 0; i < n; i++) {
+        if (data[i].missing_y) {
+            double xi = data[i].x;
+            y_pred[i] = *a0 + *a1 * xi + *a2 * xi * xi;
+            if (y_pred[i] < 0) y_pred[i] = 0; // Pastikan persentase tidak negatif
+        } else {
+            y_pred[i] = data[i].y; // Simpan data asli untuk yang tidak missing
+        }
+    }
+}
+
+// Regresi polinomial untuk kolom z (Population)
+void predictPolynomialZ(DataPoint data[], double z_pred[], int n, double *a0, double *a1, double *a2) {
+    double sx = 0, sz = 0, sx2 = 0, sx3 = 0, sx4 = 0, sxz = 0, sx2z = 0;
+    int count = 0;
+    
+    for (int i = 0; i < n; i++) {
+        if (!data[i].missing_z) {
+            double xi = data[i].x, zi = data[i].z;
+            sx += xi; sz += zi;
+            sx2 += xi * xi;
+            sx3 += xi * xi * xi;
+            sx4 += xi * xi * xi * xi;
+            sxz += xi * zi;
+            sx2z += xi * xi * zi;
+            count++;
+        }
+    }
+
+    if (count < 3) return;
+
+    // Matriks augmented 3x4 untuk persamaan normal
+    double M[3][4] = {
+        { (double)count, sx,   sx2,  sz   },
+        { sx,            sx2,  sx3,  sxz  },
+        { sx2,           sx3,  sx4,  sx2z }
+    };
+
+    // Eliminasi Gauss
+    for (int k = 0; k < 3; k++) {
+        double pivot = M[k][k];
+        if (fabs(pivot) < 1e-10) continue;
+
+        for (int j = k; j < 4; j++) {
+            M[k][j] /= pivot;
+        }
+
+        for (int i = 0; i < 3; i++) {
+            if (i != k) {
+                double factor = M[i][k];
+                for (int j = k; j < 4; j++) {
+                    M[i][j] -= factor * M[k][j];
+                }
+            }
+        }
+    }
+
+    *a0 = M[0][3];
+    *a1 = M[1][3];
+    *a2 = M[2][3];
+
+    for (int i = 0; i < n; i++) {
+        if (data[i].missing_z) {
+            double xi = data[i].x;
+            z_pred[i] = *a0 + *a1 * xi + *a2 * xi * xi;
+            if (z_pred[i] < 0) z_pred[i] = 0; // Pastikan populasi tidak negatif
+        } else {
+            z_pred[i] = data[i].z; // Simpan data asli untuk yang tidak missing
+        }
+    }
+}
+
+// Tulis hasil ke file baru
+void writeCSV(const char *filename, DataPoint data[], double y_pred[], double z_pred[], int n) {
+    FILE *fp = fopen(filename, "w");
+    if (!fp) { perror("Error membuka file untuk menulis"); return; }
+    
+    fprintf(fp, "Year,Percentage_Internet_User,Population\n");
+    
+    for (int i = 0; i < n; i++) {
+        fprintf(fp, "%.0f,", data[i].x); // Year (tanpa desimal)
+        
+        if (data[i].missing_y) {
+            fprintf(fp, "%.6f,", y_pred[i]); // Predicted Percentage
+        } else {
+            fprintf(fp, "%.6f,", data[i].y); // Original Percentage
+        }
+        
+        if (data[i].missing_z) {
+            fprintf(fp, "%.0f\n", z_pred[i]); // Predicted Population (tanpa desimal)
+        } else {
+            fprintf(fp, "%.0f\n", data[i].z); // Original Population
+        }
+    }
+    
+    fclose(fp);
+}
+
+// Plot data asli vs prediksi untuk y (Percentage_Internet_User)
+void plotDataY(DataPoint data[], double y_pred[], int n, const char *title) {
+    FILE *gp = popen("\"C:\\Program Files\\gnuplot\\bin\\gnuplot.exe\" -p", "w");
+    if (!gp) { perror("Error membuka gnuplot"); return; }
+    
+    fprintf(gp, "set title \"%s\"\n", title);
+    fprintf(gp, "set xlabel \"Year\"\n");
+    fprintf(gp, "set ylabel \"Percentage Internet User\"\n");
+    fprintf(gp, "plot '-' with points pt 7 lc rgb 'blue' title 'Data Asli', \\\n");
+    fprintf(gp, "     '-' with points pt 5 lc rgb 'red'  title 'Prediksi'\n");
+
+    // Data asli
+    for (int i = 0; i < n; i++) {
+        if (!data[i].missing_y) {
+            fprintf(gp, "%g %g\n", data[i].x, data[i].y);
+        }
+    }
+    fprintf(gp, "e\n");
+
+    // Data prediksi
+    for (int i = 0; i < n; i++) {
+        if (data[i].missing_y) {
+            fprintf(gp, "%g %g\n", data[i].x, y_pred[i]);
+        }
+    }
+    fprintf(gp, "e\n");
+
+    pclose(gp);
+}
+
+// Plot data asli vs prediksi untuk z (Population)
+void plotDataZ(DataPoint data[], double z_pred[], int n, const char *title) {
+    FILE *gp = popen("\"C:\\Program Files\\gnuplot\\bin\\gnuplot.exe\" -p", "w");
+    if (!gp) { perror("Error membuka gnuplot"); return; }
+    
+    fprintf(gp, "set title \"%s\"\n", title);
+    fprintf(gp, "set xlabel \"Year\"\n");
+    fprintf(gp, "set ylabel \"Population\"\n");
+    fprintf(gp, "plot '-' with points pt 7 lc rgb 'blue' title 'Data Asli', \\\n");
+    fprintf(gp, "     '-' with points pt 5 lc rgb 'red'  title 'Prediksi'\n");
+
+    // Data asli
+    for (int i = 0; i < n; i++) {
+        if (!data[i].missing_z) {
+            fprintf(gp, "%g %g\n", data[i].x, data[i].z);
+        }
+    }
+    fprintf(gp, "e\n");
+
+    // Data prediksi
+    for (int i = 0; i < n; i++) {
+        if (data[i].missing_z) {
+            fprintf(gp, "%g %g\n", data[i].x, z_pred[i]);
+        }
+    }
+    fprintf(gp, "e\n");
+
+    pclose(gp);
+}
+
+// Fungsi untuk mencari nilai prediksi berdasarkan tahun
+double findPredictionForYear(DataPoint data[], double pred[], int n, int year) {
+    for (int i = 0; i < n; i++) {
+        if (data[i].x == year) {
+            return pred[i];
+        }
+    }
+    return -1; // Tahun tidak ditemukan
+}
+
+// Fungsi untuk menghitung prediksi untuk tahun di luar data
+double calculatePredictionForYear(double a0, double a1, double a2, int year) {
+    double result = a0 + a1 * year + a2 * year * year;
+    return (result < 0) ? 0 : result; // Pastikan hasilnya tidak negatif
+}
+
+// Fungsi untuk menampilkan persamaan polinomial
+void displayPolynomialEquation(double a0, double a1, double a2) {
+    printf("y = ");
+    
+    if (fabs(a2) > 1e-10) {
+        printf("%g x^2 ", a2);
+        if (a1 >= 0) printf("+ ");
+    }
+    
+    if (fabs(a1) > 1e-10) {
+        printf("%g x ", a1);
+        if (a0 >= 0) printf("+ ");
+    }
+    
+    if (fabs(a0) > 1e-10 || (fabs(a1) < 1e-10 && fabs(a2) < 1e-10)) {
+        printf("%g", a0);
+    }
+    
+    printf("\n");
+}
+
+int main(int argc, char **argv) {
+    const char *input_file = (argc > 1) ? argv[1] : "data.csv";
     DataPoint data[MAX_ROWS];
-    int n;
-    FILE *fp;
     
-    // Handle command line arguments
-    if (argc > 2) {
-        printUsage(argv[0]);
-        return 1;
-    }
+    int n = readCSV(input_file, data);
+    if (n <= 0) { printf("Tidak ada data.\n"); return 1; }
     
-    if (argc == 1) {
-        // Read from stdin
-        fp = stdin;
-        printf("Reading from standard input...\n");
-    } else {
-        // Read from specified file
-        fp = fopen(argv[1], "r");
-        if (!fp) {
-            perror("Error opening input file");
-            return 1;
-        }
-        printf("Reading from file: %s\n", argv[1]);
-    }
+    printf("Berhasil membaca %d baris data.\n", n);
+
+    // Array untuk menyimpan prediksi
+    double y_pred_lin[MAX_ROWS] = {0};
+    double y_pred_interp[MAX_ROWS] = {0};
+    double y_pred_poly[MAX_ROWS] = {0};
+    double z_pred_lin[MAX_ROWS] = {0};
+    double z_pred_interp[MAX_ROWS] = {0};
+    double z_pred_poly[MAX_ROWS] = {0};
     
-    // Read the CSV data
-    n = readCSV(fp, data);
+    // Koefisien persamaan polinomial
+    double a0_y = 0, a1_y = 0, a2_y = 0; // Untuk Percentage_Internet_User
+    double a0_z = 0, a1_z = 0, a2_z = 0; // Untuk Population
+
+    // Prediksi dengan berbagai metode
+    printf("Melakukan prediksi dengan regresi linier...\n");
+    predictLinearY(data, y_pred_lin, n);
+    predictLinearZ(data, z_pred_lin, n);
     
-    if (n <= 0) {
-        printf("Error: No data read or file error occurred\n");
-        if (fp != stdin) fclose(fp);
-        return 1;
-    }
+    printf("Melakukan prediksi dengan interpolasi linier...\n");
+    predictInterpolationY(data, y_pred_interp, n);
+    predictInterpolationZ(data, z_pred_interp, n);
     
-    if (fp != stdin) fclose(fp);
+    printf("Melakukan prediksi dengan regresi polinomial...\n");
+    predictPolynomialY(data, y_pred_poly, n, &a0_y, &a1_y, &a2_y);
+    predictPolynomialZ(data, z_pred_poly, n, &a0_z, &a1_z, &a2_z);
+
+    // Tulis hasil prediksi ke file
+    writeCSV("prediksi_linear.csv", data, y_pred_lin, z_pred_lin, n);
+    writeCSV("prediksi_interpolasi.csv", data, y_pred_interp, z_pred_interp, n);
+    writeCSV("prediksi_polinomial.csv", data, y_pred_poly, z_pred_poly, n);
+
+    // Plot hasil prediksi
+    printf("Membuat grafik hasil prediksi...\n");
+    plotDataY(data, y_pred_lin, n, "Regresi Linier - Percentage Internet User");
+    plotDataZ(data, z_pred_lin, n, "Regresi Linier - Population");
+    plotDataY(data, y_pred_interp, n, "Interpolasi Linier - Percentage Internet User");
+    plotDataZ(data, z_pred_interp, n, "Interpolasi Linier - Population");
+    plotDataY(data, y_pred_poly, n, "Regresi Polinomial - Percentage Internet User");
+    plotDataZ(data, z_pred_poly, n, "Regresi Polinomial - Population");
+
+    printf("\n===== HASIL PREDIKSI NILAI YANG HILANG =====\n\n");
     
-    printf("Read %d data points\n", n);
+    // 1. Perkiraan nilai yang hilang untuk tahun-tahun yang diminta
+    printf("1. Perkiraan nilai yang hilang:\n");
+    printf("   a. Jumlah penduduk Indonesia di tahun 2005: %.0f\n", findPredictionForYear(data, z_pred_poly, n, 2005));
+    printf("   b. Jumlah penduduk Indonesia di tahun 2006: %.0f\n", findPredictionForYear(data, z_pred_poly, n, 2006));
+    printf("   c. Jumlah penduduk Indonesia di tahun 2015: %.0f\n", findPredictionForYear(data, z_pred_poly, n, 2015));
+    printf("   d. Jumlah penduduk Indonesia di tahun 2016: %.0f\n", findPredictionForYear(data, z_pred_poly, n, 2016));
+    printf("   e. Persentase pengguna Internet Indonesia di tahun 2005: %.6f%%\n", findPredictionForYear(data, y_pred_poly, n, 2005));
+    printf("   f. Persentase pengguna Internet Indonesia di tahun 2006: %.6f%%\n", findPredictionForYear(data, y_pred_poly, n, 2006));
+    printf("   g. Persentase pengguna Internet Indonesia di tahun 2015: %.6f%%\n", findPredictionForYear(data, y_pred_poly, n, 2015));
+    printf("   h. Persentase pengguna Internet Indonesia di tahun 2016: %.6f%%\n", findPredictionForYear(data, y_pred_poly, n, 2016));
 
-    // Step 1: Predict missing x using reverse regression
-    reverseRegression(data, n);
+    // 2. Persamaan polinomial untuk kedua data
+    printf("\n2. Persamaan polinomial:\n");
+    printf("   a. Persentase pengguna Internet Indonesia: ");
+    displayPolynomialEquation(a0_y, a1_y, a2_y);
+    printf("   b. Pertumbuhan populasi Indonesia: ");
+    displayPolynomialEquation(a0_z, a1_z, a2_z);
 
-    // Step 2: Predict missing y using forward regression
-    linearRegression(data, n);
-
-    // Step 3: Refine y predictions with Lagrange
-    lagrangeInterpolation(data, n);
-
-    // Step 4: Handle fully missing rows (if any)
-    extrapolateMissing(data, n);
-
-    // Write results to CSV files
-    writeCSV("output_predicted.csv", data, n);
-    printf("Predictions saved to output_predicted.csv\n");
-
-    // Plot results
-    plotGnuplot(data, n, "Data Prediction Results");
-
+    // 3. Estimasi untuk tahun 2030 dan 2035
+    printf("\n3. Estimasi:\n");
+    printf("   a. Jumlah populasi Indonesia di tahun 2030: %.0f\n", calculatePredictionForYear(a0_z, a1_z, a2_z, 2030));
+    printf("   b. Jumlah pengguna Internet di Indonesia di tahun 2035: %.6f%%\n", calculatePredictionForYear(a0_y, a1_y, a2_y, 2035));
+    
+    // Menghitung jumlah pengguna Internet (persentase * populasi / 100)
+    double population_2035 = calculatePredictionForYear(a0_z, a1_z, a2_z, 2035);
+    double percentage_2035 = calculatePredictionForYear(a0_y, a1_y, a2_y, 2035);
+    printf("      Jumlah pengguna Internet dalam angka di tahun 2035: %.0f orang\n", 
+           population_2035 * percentage_2035 / 100.0);
     return 0;
 }
